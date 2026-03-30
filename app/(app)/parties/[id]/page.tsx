@@ -28,8 +28,10 @@ function formatAmountShort(amount: number): string {
   return `Rs. ${amount.toLocaleString('en-IN')}`;
 }
 
-export default function PartyDetailPage({ params }: Props) {
-  const party = parties.find(p => p.id === params.id);
+
+export default async function PartyDetailPage({ params }: Props) {
+  const { id } = await params;
+  const party = parties.find(p => p.id === id);
   if (!party) notFound();
 
   const partyTransactions = transactions
