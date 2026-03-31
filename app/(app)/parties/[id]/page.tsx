@@ -6,10 +6,12 @@ import JourneyStep from '@/components/parties/JourneyStep';
 import { parties, transactions, transfers } from '@/lib/data';
 
 interface Props {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
-function formatAmount(amount: number): string {
+function formatAmountShort(amount: number): string {
+  if (amount >= 100000) return `Rs. ${(amount / 100000).toFixed(1)}L`;
+  if (amount >= 1000) return `Rs. ${(amount / 1000).toFixed(0)}K`;
   return `Rs. ${amount.toLocaleString('en-IN')}`;
 }
 
@@ -21,13 +23,6 @@ function formatDate(dateStr: string): string {
     minute: '2-digit',
   });
 }
-
-function formatAmountShort(amount: number): string {
-  if (amount >= 100000) return `Rs. ${(amount / 100000).toFixed(1)}L`;
-  if (amount >= 1000) return `Rs. ${(amount / 1000).toFixed(0)}K`;
-  return `Rs. ${amount.toLocaleString('en-IN')}`;
-}
-
 
 export default async function PartyDetailPage({ params }: Props) {
   const { id } = await params;
@@ -42,15 +37,14 @@ export default async function PartyDetailPage({ params }: Props) {
     .filter(t => t.type === 'debit')
     .reduce((sum, t) => sum + t.amount, 0);
 
-  // Get active payment journey — latest debit transaction
   const latestPayment = partyTransactions.find(t => t.type === 'debit');
 
-  // Get transfers related to this party
+  // Only transfers actually recorded for this party
   const partyTransfers = transfers
     .filter(t => t.partyId === party.id)
     .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
-  // Build journey steps
+  // Build journey only from real recorded events — no predictions
   const journeySteps: {
     person: string;
     time: string;
@@ -63,43 +57,44 @@ export default async function PartyDetailPage({ params }: Props) {
     journeySteps.push({
       person: `${party.contactPerson} (Client)`,
       time: formatDate(latestPayment.createdAt),
-      amount: `Paid ${formatAmountShort(latestPayment.amount)} ${latestPayment.paymentMethod}`,
+      amount: `Paid ${formatAmountShort(latestPayment.amount)} · ${latestPayment.paymentMethod}`,
       status: 'done',
     });
 
-    // Steps from transfers
-    partyTransfers.forEach((tr, index) => {
-      journeySteps.push({
-        person: `${tr.toUserName}`,
-        time: formatDate(tr.createdAt),
-        amount: `Holding ${formatAmountShort(tr.amount)}`,
-        status: index === partyTransfers.length - 1 ? 'active' : 'done',
-      });
-    });
-
-    // If no transfers yet — collector is first holder
-    if (partyTransfers.length === 0 && latestPayment.receivedByName) {
-      journeySteps.push({
-        person: `${latestPayment.receivedByName} (Collector)`,
-        time: formatDate(latestPayment.createdAt),
-        amount: `Holding ${formatAmountShort(latestPayment.amount)}`,
-        status: 'active',
+    if (partyTransfers.length === 0) {
+      // Cash is still with the first collector — mark as active
+      if (latestPayment.receivedByName) {
+        journeySteps.push({
+          person: `${latestPayment.receivedByName} (Collector)`,
+          time: formatDate(latestPayment.createdAt),
+          amount: `Currently holding ${formatAmountShort(latestPayment.amount)}`,
+          status: 'active',
+        });
+      }
+    } else {
+      // Walk through actual recorded transfers
+      partyTransfers.forEach((tr, index) => {
+        const isLast = index === partyTransfers.length - 1;
+        journeySteps.push({
+          person: tr.toUserName,
+          time: formatDate(tr.createdAt),
+          amount: isLast
+            ? `Currently holding ${formatAmountShort(tr.amount)}`
+            : `Passed ${formatAmountShort(tr.amount)} forward`,
+          status: isLast ? 'active' : 'done',
+        });
       });
     }
 
-    // Pending steps
-    if (partyTransfers.length < 2) {
+    // Single pending step — just shows it hasn't reached owner yet
+    // Only show if not already settled (balance > 0)
+    if (party.balance > 0) {
       journeySteps.push({
-        person: 'Khaleel (Supervisor)',
-        time: 'Pending',
+        person: 'Owner / Accountant',
+        time: 'Awaiting',
         status: 'pending',
       });
     }
-    journeySteps.push({
-      person: 'Accountant',
-      time: 'Pending',
-      status: 'pending',
-    });
   }
 
   const statusBadge = party.balance === 0
@@ -113,7 +108,11 @@ export default async function PartyDetailPage({ params }: Props) {
       <TopBar
         title={party.name}
         backHref="/parties"
-        rightElement={<Badge text={statusBadge.text} variant={statusBadge.variant} />}
+        rightElement={
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <Badge text={statusBadge.text} variant={statusBadge.variant} />
+          </div>
+        }
       />
 
       <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -139,10 +138,10 @@ export default async function PartyDetailPage({ params }: Props) {
           overflow: 'hidden',
         }}>
           {[
-            { label: 'Contact', value: party.contactPerson },
-            { label: 'Phone', value: party.phone },
+            { label: 'Contact',  value: party.contactPerson },
+            { label: 'Phone',    value: party.phone },
             { label: 'Deadline', value: `${party.deadlineDays} days per payment` },
-            { label: 'Type', value: party.type === 'long_term' ? 'Long-term' : 'One-time' },
+            { label: 'Type',     value: party.type === 'long_term' ? 'Long-term' : 'One-time' },
             ...(party.notes ? [{ label: 'Notes', value: party.notes }] : []),
           ].map((row, i, arr) => (
             <div key={row.label} style={{
@@ -168,7 +167,29 @@ export default async function PartyDetailPage({ params }: Props) {
           ))}
         </div>
 
-        {/* Current payment journey */}
+        {/* Edit button — admin only */}
+        <a href={`/parties/${party.id}/edit`} style={{ textDecoration: 'none' }}>
+          <div style={{
+            border: '1px solid #e5e7eb',
+            borderRadius: '10px',
+            padding: '11px 14px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            background: '#ffffff',
+            cursor: 'pointer',
+          }}>
+            <span style={{ fontSize: '13px', color: '#1a1a1a', fontWeight: 500 }}>
+              Edit party details
+            </span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+              stroke="#6b7280" strokeWidth="2">
+              <path d="M9 18l6-6-6-6" />
+            </svg>
+          </div>
+        </a>
+
+        {/* Journey — only if there are actual recorded steps */}
         {journeySteps.length > 0 && (
           <div>
             <div style={{
@@ -192,15 +213,15 @@ export default async function PartyDetailPage({ params }: Props) {
                 justifyContent: 'space-between',
                 alignItems: 'center',
                 marginBottom: '14px',
+                paddingBottom: '12px',
+                borderBottom: '1px solid #f3f4f6',
               }}>
                 <span style={{ fontSize: '13px', fontWeight: 600, color: '#1a1a1a' }}>
-                  {latestPayment && formatAmountShort(latestPayment.amount)}
-                  {latestPayment?.paymentMethod && (
-                    <span style={{ fontWeight: 400, color: '#6b7280' }}>
-                      {' '}· {latestPayment.paymentMethod.charAt(0).toUpperCase()
-                        + latestPayment.paymentMethod.slice(1)}
-                    </span>
-                  )}
+                  {formatAmountShort(latestPayment!.amount)}
+                  <span style={{ fontWeight: 400, color: '#6b7280' }}>
+                    {' '}· {latestPayment!.paymentMethod?.charAt(0).toUpperCase()
+                      + latestPayment!.paymentMethod!.slice(1)}
+                  </span>
                 </span>
                 <Badge text="In transit" variant="amber" />
               </div>
@@ -253,10 +274,8 @@ export default async function PartyDetailPage({ params }: Props) {
                   gap: '12px',
                   padding: '12px 14px',
                   borderBottom: i < partyTransactions.length - 1
-                    ? '1px solid #f3f4f6'
-                    : 'none',
+                    ? '1px solid #f3f4f6' : 'none',
                 }}>
-                  {/* Icon */}
                   <div style={{
                     width: '34px',
                     height: '34px',
@@ -276,7 +295,6 @@ export default async function PartyDetailPage({ params }: Props) {
                       }
                     </svg>
                   </div>
-
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: '13px', fontWeight: 500, color: '#1a1a1a' }}>
                       {txn.type === 'debit' ? 'Payment received' : 'Credit — new supply'}
@@ -287,7 +305,6 @@ export default async function PartyDetailPage({ params }: Props) {
                       {txn.note && ` · ${txn.note}`}
                     </div>
                   </div>
-
                   <div style={{
                     fontSize: '14px',
                     fontWeight: 600,

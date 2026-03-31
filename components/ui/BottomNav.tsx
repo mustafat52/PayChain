@@ -62,6 +62,17 @@ const navItems = [
       </svg>
     ),
   },
+  {
+    href: '/profile',
+    label: 'Profile',
+    icon: (active: boolean) => (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
+        stroke={active ? '#1D9E75' : '#6b7280'} strokeWidth="1.8">
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+        <circle cx="12" cy="7" r="4" />
+      </svg>
+    ),
+  },
 ];
 
 export default function BottomNav() {
@@ -93,14 +104,14 @@ export default function BottomNav() {
               flexDirection: 'column',
               alignItems: 'center',
               justifyContent: 'center',
-              padding: '10px 0 8px',
+              padding: '8px 0 6px',
               textDecoration: 'none',
-              gap: '3px',
+              gap: '2px',
             }}
           >
             {item.icon(active)}
             <span style={{
-              fontSize: '10px',
+              fontSize: '9px',
               color: active ? '#1D9E75' : '#6b7280',
               fontWeight: active ? 600 : 400,
             }}>
